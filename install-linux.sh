@@ -1,8 +1,13 @@
 #!/bin/bash
 SOURCE_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 
+# Read version
+VERSION_RAW=$(cat "$SOURCE_DIR/src/VERSION" 2>/dev/null || echo "0.0")
+VERSION_DISPLAY="v$VERSION_RAW"
+[[ "$VERSION_RAW" == 0* ]] && VERSION_DISPLAY="$VERSION_DISPLAY-beta"
+
 echo "------------------------------------------------"
-echo "🌐 JAY-CLI SYSTEM SYNC"
+echo "🌐 JAY-CLI $VERSION_DISPLAY SYSTEM SYNC"
 echo "------------------------------------------------"
 echo "📦 Mirroring src to /opt/jay-cli..."
 
@@ -36,7 +41,11 @@ shift
 
 # --- DYNAMIC TREE HELP ---
 if [[ "$COMMAND" == "--help" ]] || [[ -z "$COMMAND" ]]; then
-    echo "🦁 Jay-CLI | Agency Scaffolding Tool"
+    VERSION_RAW=$(cat "/opt/jay-cli/VERSION" 2>/dev/null || echo "0.0")
+    VERSION_DISPLAY="v$VERSION_RAW"
+    [[ "$VERSION_RAW" == 0* ]] && VERSION_DISPLAY="$VERSION_DISPLAY-beta"
+
+    echo "🦁 Jay-CLI $VERSION_DISPLAY | Agency Scaffolding Tool"
     echo "Usage: jay-cli [namespace] [command]"
     echo "--------------------------------------------"
     

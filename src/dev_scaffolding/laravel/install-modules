@@ -100,3 +100,14 @@ for mod in $INSTALL_TARGETS; do
 done
 
 echo "✅ All requested modules have been processed."
+
+# Automated Restart and Build
+echo "🔄 Restarting Sail to apply infrastructure changes..."
+./vendor/bin/sail down
+./vendor/bin/sail up -d
+
+echo "📦 Building assets with NPM..."
+./vendor/bin/sail npm install
+./vendor/bin/sail npm run build
+
+echo "✨ All modules are installed and assets are built. Ready to go!"

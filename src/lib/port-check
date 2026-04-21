@@ -11,12 +11,24 @@ get_unique_port() {
         PORT=$(( (RANDOM % 40000) + 10000 ))
         
         # 1. Check if it's in our .jay_cli_ports registry
-        # 2. Check if the system is currently listening on that port
-        if ! grep -q "^$PORT$" "$REGISTRY_FILE" && ! ss -tuln | grep -q ":$PORT "; then
+        # 2. Check if the system is currently listening on that port (robust check)
+        # 3. Use netcat as a fallback to verify the port is really free
+        
+        IN_REGISTRY=$(grep -q "^$PORT$" "$REGISTRY_FILE" && echo "yes" || echo "no")
+        IN_SS=$(ss -tuln | grep -q ":$PORT\(\s\|$\)" && echo "yes" || echo "no")
+        
+        # Attempt to open a socket on that port to verify it's truly free
+        # (This is the most reliable check)
+        (echo > /dev/tcp/127.0.0.1/$PORT) >/dev/null 2>&1
+        TCP_BUSY=$?
+
+        if [ "$IN_REGISTRY" == "no" ] && [ "$IN_SS" == "no" ] && [ $TCP_BUSY -ne 0 ]; then
             echo "$PORT" >> "$REGISTRY_FILE"
             echo "$PORT"
             break
         fi
+        
+        # If we hit this, the port was taken, loop again
     done
 }
 

@@ -27,16 +27,24 @@ curl -s "https://laravel.build/$INSTALL_PATH?with=pgsql,redis,mailpit,typesense"
 
 cd "$INSTALL_PATH" || exit
 
-# 3. Detect Compose File & Inject SAIL_COMPOSE
+# 3. Detect Compose File & Inject Environment Locks
 COMPOSE_FILE=$(get_compose_file)
 if [ -n "$COMPOSE_FILE" ] && [ -f .env ]; then
+    # Lock Sail to the specific compose file
     if grep -q "^SAIL_COMPOSE=" .env; then
         sed -i "s|^SAIL_COMPOSE=.*|SAIL_COMPOSE=$COMPOSE_FILE|g" .env
     else
-        # Append after APP_URL for neatness
         sed -i "/^APP_URL=/a SAIL_COMPOSE=$COMPOSE_FILE" .env
     fi
-    echo "⚙️  Environment locked to: $COMPOSE_FILE"
+
+    # Inject COMPOSE_PROJECT_NAME to prevent directory-based naming (like 'backend-')
+    if grep -q "^COMPOSE_PROJECT_NAME=" .env; then
+        sed -i "s|^COMPOSE_PROJECT_NAME=.*|COMPOSE_PROJECT_NAME=$PROJECT_NAME|g" .env
+    else
+        sed -i "/^APP_NAME=/a COMPOSE_PROJECT_NAME=$PROJECT_NAME" .env
+    fi
+
+    echo "⚙️  Environment locked to project: $PROJECT_NAME ($COMPOSE_FILE)"
 fi
 
 # 4. Trigger Sailify (Modules Integration)
@@ -59,7 +67,14 @@ echo "🏗️ Running migrations..."
 # 6. Final Permissions
 sudo chown -R $USER:$USER .
 
+# Helper for Navigation
+FINAL_CD="$PROJECT_NAME"
+[ "$SOLO_MODE" = false ] && FINAL_CD="$PROJECT_NAME/backend"
+
 echo "------------------------------------------------"
 echo "✅ Project $PROJECT_NAME is live!"
 echo "🌎 URL: https://${PROJECT_NAME//_/-}.dev.test"
+echo ""
+echo "👉 Next Step: cd $FINAL_CD"
+echo "🛠️  Then run: jay-cli laravel install-modules"
 echo "------------------------------------------------"

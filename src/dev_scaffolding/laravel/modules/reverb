@@ -1,4 +1,5 @@
 #!/bin/bash
+# Info: Configures Laravel Reverb with unique ports and Traefik SSL routing
 
 # Load Libraries
 LIB_ROOT="$(dirname "$0")/../../../lib"
@@ -11,27 +12,80 @@ if [ ! -f "vendor/bin/sail" ]; then
 fi
 
 COMPOSE_FILE=$(get_compose_file)
-echo "📡 Configuring Laravel Reverb WebSockets..."
+echo "📡 Configuring Laravel Reverb WebSockets with SSL..."
 
 # 1. Install Reverb
 ./vendor/bin/sail php artisan install:broadcasting --reverb --no-interaction
 
-# 2. Get a truly unique port for Reverb
+# 2. Get a truly unique port for the Reverb server
 NEW_REVERB_PORT=$(get_unique_port)
 
-# 3. Update .env with the unique port
-if grep -q "^REVERB_PORT=" .env; then
-    sed -i "s|^REVERB_PORT=.*|REVERB_PORT=$NEW_REVERB_PORT|g" .env
-else
-    echo "REVERB_PORT=$NEW_REVERB_PORT" >> .env
+# 3. Detect Domain and Keys from .env
+DOMAIN=$(grep "^APP_URL=" .env | cut -d'/' -f3)
+ROUTER_NAME=$(echo "$DOMAIN" | sed 's/[\._]/-/g')
+APP_KEY=$(grep "^REVERB_APP_KEY=" .env | cut -d'=' -f2)
+
+# 4. Update .env with SSL-aware settings and literal Vite variables
+if [ -f .env ]; then
+    sed -i "s|^REVERB_HOST=.*|REVERB_HOST=$DOMAIN|g" .env
+    sed -i "s|^REVERB_PORT=.*|REVERB_PORT=443|g" .env
+    sed -i "s|^REVERB_SCHEME=.*|REVERB_SCHEME=https|g" .env
+    
+    if grep -q "^REVERB_SERVER_PORT=" .env; then
+        sed -i "s|^REVERB_SERVER_PORT=.*|REVERB_SERVER_PORT=$NEW_REVERB_PORT|g" .env
+    else
+        echo "REVERB_SERVER_PORT=$NEW_REVERB_PORT" >> .env
+    fi
+
+    sed -i "s|^VITE_REVERB_APP_KEY=.*|VITE_REVERB_APP_KEY=\"$APP_KEY\"|g" .env
+    sed -i "s|^VITE_REVERB_HOST=.*|VITE_REVERB_HOST=\"$DOMAIN\"|g" .env
+    sed -i "s|^VITE_REVERB_PORT=.*|VITE_REVERB_PORT=\"443\"|g" .env
+    sed -i "s|^VITE_REVERB_SCHEME=.*|VITE_REVERB_SCHEME=\"https\"|g" .env
 fi
 
-# 4. Inject into Compose mapping
-REVERB_PORT_LINE="- '\${REVERB_PORT:-$NEW_REVERB_PORT}:\${REVERB_PORT:-$NEW_REVERB_PORT}'"
-
-if ! grep -q "REVERB_PORT" "$COMPOSE_FILE"; then
+# 5. Inject into Compose mapping (Ports)
+REVERB_PORT_LINE="- '\${REVERB_SERVER_PORT:-$NEW_REVERB_PORT}:\${REVERB_SERVER_PORT:-$NEW_REVERB_PORT}'"
+if ! grep -q "REVERB_SERVER_PORT" "$COMPOSE_FILE"; then
     echo "🔌 Mapping Reverb to unique port: $NEW_REVERB_PORT"
-    sed -i "/VITE_PORT:-5173}/a \            $REVERB_PORT_LINE" "$COMPOSE_FILE"
+    sed -i "/VITE_PORT/a \            $REVERB_PORT_LINE" "$COMPOSE_FILE"
 fi
 
-echo "✅ Reverb integrated on port $NEW_REVERB_PORT."
+# 6. Inject Traefik Labels into Compose for WebSocket routing
+echo "🔌 Injecting Traefik WebSocket routing for Reverb..."
+
+# First, clean up any existing reverb labels for this project to avoid duplicates
+sed -i "/$ROUTER_NAME-reverb/d" "$COMPOSE_FILE"
+
+# Create a temporary file for the labels
+TEMP_LABELS="reverb_labels.tmp"
+cat <<EOF > "$TEMP_LABELS"
+            - "traefik.http.routers.$ROUTER_NAME-reverb.entrypoints=websecure"
+            - "traefik.http.routers.$ROUTER_NAME-reverb.rule=Host(\`$DOMAIN\`) && (PathPrefix(\`/app\`) || PathPrefix(\`/reverb\`))"
+            - "traefik.http.routers.$ROUTER_NAME-reverb.tls=true"
+            - "traefik.http.services.$ROUTER_NAME-reverb.loadbalancer.server.port=$NEW_REVERB_PORT"
+            - "traefik.http.routers.$ROUTER_NAME-reverb.service=$ROUTER_NAME-reverb"
+EOF
+
+# Use sed to read the temporary file after the traefik.enable line
+if grep -q "traefik.enable=true" "$COMPOSE_FILE"; then
+    sed -i "/traefik.enable=true/r $TEMP_LABELS" "$COMPOSE_FILE"
+else
+    # Fallback if traefik.enable isn't found (e.g. sailify hasn't run)
+    echo "⚠️  Warning: traefik.enable label not found. Appending to end of labels block..."
+    # Naive attempt to find any traefik label and append
+    sed -i "/traefik/r $TEMP_LABELS" "$COMPOSE_FILE"
+fi
+rm "$TEMP_LABELS"
+
+# 7. Verification Check
+if grep -q "$ROUTER_NAME-reverb" "$COMPOSE_FILE"; then
+    echo "✅ Reverb labels verified in $COMPOSE_FILE"
+else
+    echo "❌ Error: Failed to inject Reverb labels. Manual intervention required."
+    exit 1
+fi
+
+echo "------------------------------------------------"
+echo "✅ Reverb integrated with SSL support."
+echo "👉 Start Reverb using: php artisan reverb:start --port=$NEW_REVERB_PORT"
+echo "------------------------------------------------"

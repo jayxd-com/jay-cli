@@ -1,0 +1,102 @@
+#!/bin/bash
+# Info: Batch install modules (Horizon, Octane, Reverb)
+# Info: --with=mod1,mod2: Install specific modules
+# Info: --force: Re-install modules even if detected
+# Info: --list: List all available modules
+
+# Load Libraries
+LIB_ROOT="$(dirname "$0")/../../lib"
+source "$LIB_ROOT/sail-compose-check"
+
+MODULES_DIR="$(dirname "$0")/modules"
+AVAILABLE_MODULES=$(ls -p "$MODULES_DIR" | grep -v / | grep -v "sailify")
+
+show_help() {
+    echo "🦁 Jay-CLI | Laravel Module Installer"
+    echo "Usage: jay-cli laravel install-modules [options]"
+    echo ""
+    echo "Options:"
+    echo "  --with=mod1,mod2    Install specific modules"
+    echo "  --force             Re-install modules even if already detected"
+    echo "  --list              List all available modules"
+    echo "  --help              Show this help menu"
+    echo ""
+    list_modules
+    exit 0
+}
+
+list_modules() {
+    echo "📦 Available Modules:"
+    for mod in $AVAILABLE_MODULES; do
+        echo "  - $mod"
+    done
+}
+
+is_installed() {
+    local mod=$1
+    [ -f "composer.json" ] || return 1
+    
+    case $mod in
+        boost)
+            grep -q "laravel/horizon" composer.json && return 0
+            ;;
+        octane)
+            grep -q "laravel/octane" composer.json && return 0
+            ;;
+        reverb)
+            grep -q "laravel/reverb" composer.json && return 0
+            ;;
+    esac
+    return 1
+}
+
+# Parse Arguments
+INSTALL_TARGETS=""
+FORCE_INSTALL=false
+
+for arg in "$@"; do
+    case $arg in
+        --help)
+            show_help
+            ;;
+        --list)
+            list_modules
+            exit 0
+            ;;
+        --force)
+            FORCE_INSTALL=true
+            ;;
+        --with=*)
+            INSTALL_TARGETS="${arg#*=}"
+            INSTALL_TARGETS="${INSTALL_TARGETS//,/ }"
+            ;;
+    esac
+done
+
+if [ ! -f "vendor/bin/sail" ]; then
+    echo "❌ Execution Error: Sail binary not found. Are you in a Laravel project root?"
+    exit 1
+fi
+
+# If no specific targets, install all (except sailify)
+if [ -z "$INSTALL_TARGETS" ]; then
+    INSTALL_TARGETS=$AVAILABLE_MODULES
+fi
+
+echo "🛠️  Starting Module Installation Suite..."
+
+for mod in $INSTALL_TARGETS; do
+    if [ -f "$MODULES_DIR/$mod" ]; then
+        if [ "$FORCE_INSTALL" = false ] && is_installed "$mod"; then
+            echo "⏭️  Skipping '$mod' (Already installed). Use --force to override."
+            continue
+        fi
+        
+        echo "🔹 Installing module: $mod..."
+        bash "$MODULES_DIR/$mod"
+    else
+        echo "⚠️  Warning: Module '$mod' not found. Skipping."
+    fi
+done
+
+echo "✅ All requested modules have been processed."

@@ -1,0 +1,105 @@
+#!/bin/bash
+
+PROJECT=$1
+if [ -z "$PROJECT" ]; then
+  echo "❌ Error: Please provide a project name."
+  echo "Usage: sailify my-project-name"
+  exit 1
+fi
+
+# Sanitize name: underscores to hyphens for DNS compliance
+CLEAN_PROJECT="${PROJECT//_/-}"
+# .dev.test is used because browsers reject wildcards on TLDs like .test
+DOMAIN="${CLEAN_PROJECT}.dev.test"
+# Load Libraries
+LIB_ROOT="$(dirname "$0")/../../../lib"
+source "$LIB_ROOT/sail-compose-check"
+source "$LIB_ROOT/port-check"
+
+COMPOSE_FILE=$(get_compose_file)
+if [ -z "$COMPOSE_FILE" ]; then
+    echo "❌ Error: No valid compose file found (compose.yaml or sail-compose.yaml)."
+    exit 1
+fi
+
+# --- 3. UPDATE .ENV ---
+if [ -f .env ]; then
+    # Force HTTPS and the new .dev.test TLD
+    sed -i "s|^APP_URL=.*|APP_URL=https://$DOMAIN|g" .env
+
+    # Inject ASSET_URL for proper Vite/Asset loading over SSL
+    sed -i '/^ASSET_URL=/d' .env
+    sed -i "/^APP_URL=/a ASSET_URL=https://$DOMAIN" .env
+
+    # --- DATABASE ALIGNMENT ---
+    # Convert project hyphens to underscores for SQL safety
+    DB_NAME="${CLEAN_PROJECT//-/_}"
+
+    # Force DB_DATABASE to match the Project Name
+    sed -i "s|^DB_DATABASE=.*|DB_DATABASE=$DB_NAME|g" .env
+    # Ensure DB_USERNAME is 'sail' (default for the Sail installer)
+    sed -i "s|^DB_USERNAME=.*|DB_USERNAME=sail|g" .env
+
+    echo "🗄️ Database name synchronized to: $DB_NAME"
+
+    # Clean and generate unique ports
+    sed -i '/# --- SAILIFY AUTO PORTS ---/d' .env
+    sed -i '/^FORWARD_/d' .env
+    sed -i '/^VITE_PORT=/d' .env
+
+    echo "" >> .env
+    echo "# --- SAILIFY AUTO PORTS ---" >> .env
+    echo "VITE_PORT=$(get_unique_port)" >> .env
+    echo "FORWARD_DB_PORT=$(get_unique_port)" >> .env
+    echo "FORWARD_REDIS_PORT=$(get_unique_port)" >> .env
+    echo "FORWARD_MAILPIT_PORT=$(get_unique_port)" >> .env
+    echo "FORWARD_MAILPIT_DASHBOARD_PORT=$(get_unique_port)" >> .env
+    echo "FORWARD_TYPESENSE_PORT=$(get_unique_port)" >> .env
+    echo "FORWARD_RUSTFS_PORT=$(get_unique_port)" >> .env
+    echo "FORWARD_RUSTFS_CONSOLE_PORT=$(get_unique_port)" >> .env
+
+    echo "✅ .env updated to HTTPS and unique ports assigned."
+fi
+
+# --- 4. MODIFY COMPOSE FILE ---
+# Disable direct port 80 access (use Traefik instead)
+sed -i "s|- '\${APP_PORT:-80}:80'|# - '\${APP_PORT:-80}:80'|g" "$COMPOSE_FILE"
+
+# Ensure Vite port is exposed for HMR
+sed -i "s|# - '\${VITE_PORT:-5173}:\${VITE_PORT:-5173}'|- '\${VITE_PORT:-5173}:\${VITE_PORT:-5173}'|g" "$COMPOSE_FILE"
+
+# Inject Traefik Labels with SSL Support
+awk -v domain="$DOMAIN" '
+BEGIN {
+    router_name = domain
+    gsub(/[\._]/, "-", router_name)
+}
+/^    laravel\.test:/ { in_laravel = 1 }
+in_laravel && /^        networks:/ {
+    print
+    getline # Print the "- sail" line
+    print
+    print "            - gateway"
+    print "        labels:"
+    print "            - \"traefik.enable=true\""
+    print "            - \"traefik.docker.network=gateway\""
+    print "            - \"traefik.http.routers." router_name "-web.entrypoints=websecure\""
+    print "            - \"traefik.http.routers." router_name "-web.rule=Host(\`" domain "\`)\""
+    print "            - \"traefik.http.routers." router_name "-web.tls=true\""
+    print "            - \"traefik.http.services." router_name "-web.loadbalancer.server.port=80\""
+    in_laravel = 0
+    next
+}
+1' "$COMPOSE_FILE" > tmp.yml && mv tmp.yml "$COMPOSE_FILE"
+
+# --- 5. NETWORK INJECTION ---
+if ! grep -q "^ *gateway:" "$COMPOSE_FILE"; then
+    if grep -q "^networks:" "$COMPOSE_FILE"; then
+        sed -i '/^networks:/a \    gateway:\n        external: true' "$COMPOSE_FILE"
+    else
+        echo -e "\nnetworks:\n    gateway:\n        external: true" >> "$COMPOSE_FILE"
+    fi
+fi
+
+echo "✅ $COMPOSE_FILE updated for Traefik v3 SSL!"
+echo "🎉 Done! Project URL: https://$DOMAIN"

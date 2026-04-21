@@ -1,0 +1,18 @@
+#!/bin/bash
+# Library: sail-compose-check
+
+get_compose_file() {
+    if [ -f "compose.yaml" ]; then
+        echo "compose.yaml"
+    elif [ -f "compose.yml" ]; then
+        echo "compose.yml"
+    elif [ -f "sail-compose.yaml" ]; then
+        echo "sail-compose.yaml"
+    elif [ -f "sail-compose.yml" ]; then
+        echo "sail-compose.yml"
+    else
+        echo ""
+    fi
+}
+
+export -f get_compose_file

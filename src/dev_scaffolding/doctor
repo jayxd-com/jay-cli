@@ -1,0 +1,109 @@
+#!/bin/bash
+# Info: Run a health check on the Jay-CLI installation and source files
+# Info: Verifies directory structure, libraries, and internal script links
+
+echo "🩺 Jay-CLI Doctor | Diagnostic Tool"
+echo "------------------------------------------------"
+
+ERROR=0
+SRC_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." &> /dev/null && pwd )"
+
+# 1. Path & Architecture Verification
+echo "🔍 Checking Directory Structure..."
+REQUIRED_DIRS=("lib" "dev_scaffolding")
+
+for dir in "${REQUIRED_DIRS[@]}"; do
+    if [ -d "$SRC_DIR/$dir" ]; then
+        echo "✅ Found $dir/ directory."
+    else
+        echo "❌ Missing $dir/ directory at $SRC_DIR/$dir"
+        ERROR=1
+    fi
+done
+
+# 2. Shared Libraries Verification
+echo -e "\n📚 Checking Shared Libraries..."
+LIBS=("port-check" "sail-compose-check")
+for lib in "${LIBS[@]}"; do
+    if [ -f "$SRC_DIR/lib/$lib" ]; then
+        echo "✅ Library '$lib' is present."
+    else
+        echo "❌ Library '$lib' is missing from $SRC_DIR/lib/"
+        ERROR=1
+    fi
+done
+
+# 3. Link Integrity (Internal Sourcing)
+echo -e "\n🔗 Checking Script Link Integrity (Internal Sourcing)..."
+while read -r script; do
+    script_name=$(basename "$script")
+    script_dir=$(dirname "$script")
+    
+    # Check for 'source' or '.' commands
+    grep -E "^\s*(source|\.)\s+" "$script" | while read -r line; do
+        # Extract the path. This is a bit naive but handles "$LIB_ROOT/..." etc. if we resolve vars
+        # However, for a simple check, we can look for the common patterns we used.
+        target=$(echo "$line" | awk '{print $2}' | sed 's/\"//g' | sed "s|\\\$LIB_ROOT|$SRC_DIR/lib|g" | sed "s|\\\$LIB_PATH|$SRC_DIR/lib/sail-compose-check|g" | sed "s|\\\$SCRIPT_DIR|$script_dir|g")
+        
+        # Resolve relative paths like ../../../lib
+        if [[ "$target" == *"/.."* ]]; then
+            # Use realpath if available, or just a simple resolve
+            target=$(cd "$script_dir" && realpath -m "$target" 2>/dev/null)
+        fi
+
+        if [ -n "$target" ] && [ ! -f "$target" ]; then
+            echo "❌ $script_name: Broken link detected -> $target"
+            ERROR=1
+        else
+            echo "✅ $script_name: Internal link OK."
+        fi
+    done
+done < <(find "$SRC_DIR/dev_scaffolding" -type f)
+
+# 4. Help Menu Metadata Verification
+echo -e "\n📝 Checking Command Metadata (# Info tags)..."
+find "$SRC_DIR/dev_scaffolding" -maxdepth 2 -type f -not -path "*/modules/*" | while read -r script; do
+    if grep -q "^# Info:" "$script"; then
+        echo "✅ $(basename "$script"): Has description tag."
+    else
+        echo "⚠️  $(basename "$script"): Missing # Info tag (will look generic in help)."
+    fi
+done
+
+# 5. Port Registry Verification
+echo -e "\n🔌 Checking Port Registry..."
+REGISTRY="$HOME/.jay_cli_ports"
+if [ -f "$REGISTRY" ]; then
+    if [ -w "$REGISTRY" ]; then
+        echo "✅ Port registry is writable ($REGISTRY)."
+    else
+        echo "❌ Port registry is NOT writable ($REGISTRY)."
+        ERROR=1
+    fi
+else
+    echo "ℹ️  Port registry doesn't exist yet (will be created on first use)."
+fi
+
+# 6. System Sync Verification
+echo -e "\n🌐 Checking System Mirror..."
+if [ -d "/opt/jay-cli" ]; then
+    echo "✅ /opt/jay-cli mirror directory exists."
+else
+    echo "⚠️  /opt/jay-cli missing. Have you run install-linux.sh?"
+fi
+
+if [ -L "/usr/local/bin/jay-cli" ] || [ -f "/usr/local/bin/jay-cli" ]; then
+    echo "✅ Global 'jay-cli' command is present."
+else
+    echo "❌ Global 'jay-cli' command is missing from /usr/local/bin/"
+    ERROR=1
+fi
+
+echo "------------------------------------------------"
+if [ "$ERROR" == 1 ]; then
+    echo "💥 Doctor found some issues. Please review the errors above."
+    exit 1
+else
+    echo "✨ Jay-CLI is healthy and ready to scaffold!"
+    exit 0
+fi

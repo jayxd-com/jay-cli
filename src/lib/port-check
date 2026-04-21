@@ -1,0 +1,23 @@
+#!/bin/bash
+# Library: lib/port-check
+
+REGISTRY_FILE="$HOME/.jay_cli_ports"
+touch "$REGISTRY_FILE"
+
+get_unique_port() {
+    local PORT
+    while true; do
+        # Generate a random port between 10000 and 50000
+        PORT=$(( (RANDOM % 40000) + 10000 ))
+        
+        # 1. Check if it's in our .jay_cli_ports registry
+        # 2. Check if the system is currently listening on that port
+        if ! grep -q "^$PORT$" "$REGISTRY_FILE" && ! ss -tuln | grep -q ":$PORT "; then
+            echo "$PORT" >> "$REGISTRY_FILE"
+            echo "$PORT"
+            break
+        fi
+    done
+}
+
+export -f get_unique_port

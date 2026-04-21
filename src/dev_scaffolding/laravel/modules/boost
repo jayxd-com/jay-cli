@@ -1,0 +1,12 @@
+#!/bin/bash
+if [ ! -f "vendor/bin/sail" ]; then
+    echo "❌ Execution Error: Sail binary not found."
+    exit 1
+fi
+
+echo "🚀 Injecting Horizon & Telescope Performance Suite..."
+./vendor/bin/sail composer require laravel/horizon laravel/telescope
+./vendor/bin/sail php artisan horizon:install
+./vendor/bin/sail php artisan telescope:install
+./vendor/bin/sail artisan migrate
+echo "✅ System boosted with Redis queue and debugging tools."

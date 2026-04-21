@@ -1,0 +1,31 @@
+#!/bin/bash
+# Info: Completely uninstall Jay-CLI from the system
+
+echo "🗑️  Jay-CLI Uninstall | Cleanup Tool"
+echo "------------------------------------------------"
+
+# 1. Ask for confirmation
+read -p "⚠️  Are you sure you want to remove Jay-CLI from your system? (y/N): " CONFIRM
+if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+    echo "❌ Uninstall cancelled."
+    exit 0
+fi
+
+echo "🧹 Starting cleanup..."
+
+# 2. Define Paths
+SYSTEM_DIR="/opt/jay-cli"
+EXECUTABLE_PATH="/usr/local/bin/jay-cli"
+
+# 3. Perform Deletion
+# We use sudo as these are system-level paths
+echo "🚀 Removing system mirror at $SYSTEM_DIR..."
+sudo rm -rf "$SYSTEM_DIR"
+
+echo "🚀 Removing global executable at $EXECUTABLE_PATH..."
+sudo rm -f "$EXECUTABLE_PATH"
+
+echo "------------------------------------------------"
+echo "✅ Jay-CLI has been successfully uninstalled."
+echo "ℹ️  Note: Your port registry (~/.jay_cli_ports) was kept for safety."
+echo "------------------------------------------------"

@@ -1,0 +1,37 @@
+#!/bin/bash
+
+# Load Libraries
+LIB_ROOT="$(dirname "$0")/../../../lib"
+source "$LIB_ROOT/sail-compose-check"
+source "$LIB_ROOT/port-check"
+
+if [ ! -f "vendor/bin/sail" ]; then
+    echo "❌ Execution Error: Sail binary not found."
+    exit 1
+fi
+
+COMPOSE_FILE=$(get_compose_file)
+echo "📡 Configuring Laravel Reverb WebSockets..."
+
+# 1. Install Reverb
+./vendor/bin/sail php artisan install:broadcasting --reverb --no-interaction
+
+# 2. Get a truly unique port for Reverb
+NEW_REVERB_PORT=$(get_unique_port)
+
+# 3. Update .env with the unique port
+if grep -q "^REVERB_PORT=" .env; then
+    sed -i "s|^REVERB_PORT=.*|REVERB_PORT=$NEW_REVERB_PORT|g" .env
+else
+    echo "REVERB_PORT=$NEW_REVERB_PORT" >> .env
+fi
+
+# 4. Inject into Compose mapping
+REVERB_PORT_LINE="- '\${REVERB_PORT:-$NEW_REVERB_PORT}:\${REVERB_PORT:-$NEW_REVERB_PORT}'"
+
+if ! grep -q "REVERB_PORT" "$COMPOSE_FILE"; then
+    echo "🔌 Mapping Reverb to unique port: $NEW_REVERB_PORT"
+    sed -i "/VITE_PORT:-5173}/a \            $REVERB_PORT_LINE" "$COMPOSE_FILE"
+fi
+
+echo "✅ Reverb integrated on port $NEW_REVERB_PORT."

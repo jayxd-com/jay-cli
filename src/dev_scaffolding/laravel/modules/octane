@@ -1,0 +1,13 @@
+#!/bin/bash
+if [ ! -f "vendor/bin/sail" ]; then
+    echo "❌ Execution Error: Sail binary not found."
+    echo "Please ensure you are in the root of a Laravel project or run:"
+    echo "  jay-cli laravel create [project-name]"
+    exit 1
+fi
+
+echo "⚡ Optimizing with Laravel Octane & FrankenPHP..."
+./vendor/bin/sail composer require laravel/octane --with-all-dependencies
+./vendor/bin/sail php artisan octane:install --server=frankenphp
+sed -i "s|^OCTANE_SERVER=.*|OCTANE_SERVER=frankenphp|g" .env
+echo "✅ Octane server configured successfully."

@@ -1,0 +1,65 @@
+#!/bin/bash
+# Info: Provision a new agency-grade Laravel project
+# Info: --solo: Install in root folder (defaults to 'backend/')
+
+# Load the library
+LIB_PATH="$(dirname "$0")/../../lib/sail-compose-check"
+[ -f "$LIB_PATH" ] && source "$LIB_PATH"
+
+PROJECT_NAME=$1
+SOLO_MODE=false
+for arg in "$@"; do [ "$arg" == "--solo" ] && SOLO_MODE=true; done
+
+if [ -z "$PROJECT_NAME" ]; then
+    echo "❌ Usage: jay-cli laravel create [name] [--solo]"
+    exit 1
+fi
+
+echo "🚀 Provisioning Laravel Project: $PROJECT_NAME"
+
+# 1. Setup Directories
+mkdir -p "$PROJECT_NAME" && cd "$PROJECT_NAME" || exit
+INSTALL_PATH="backend"; [ "$SOLO_MODE" = true ] && INSTALL_PATH="."
+
+# 2. Download Laravel
+echo "📥 Downloading Laravel + Sail Stack..."
+curl -s "https://laravel.build/$INSTALL_PATH?with=pgsql,redis,mailpit,typesense" | bash
+
+cd "$INSTALL_PATH" || exit
+
+# 3. Detect Compose File & Inject SAIL_COMPOSE
+COMPOSE_FILE=$(get_compose_file)
+if [ -n "$COMPOSE_FILE" ] && [ -f .env ]; then
+    if grep -q "^SAIL_COMPOSE=" .env; then
+        sed -i "s|^SAIL_COMPOSE=.*|SAIL_COMPOSE=$COMPOSE_FILE|g" .env
+    else
+        # Append after APP_URL for neatness
+        sed -i "/^APP_URL=/a SAIL_COMPOSE=$COMPOSE_FILE" .env
+    fi
+    echo "⚙️  Environment locked to: $COMPOSE_FILE"
+fi
+
+# 4. Trigger Sailify (Modules Integration)
+SCRIPT_DIR=$(dirname "$0")
+if [ -f "$SCRIPT_DIR/modules/sailify" ]; then
+    echo "🔧 Running SSL and Traefik configuration..."
+    bash "$SCRIPT_DIR/modules/sailify" "$PROJECT_NAME"
+fi
+
+# 5. Infrastructure Boot
+echo "🐳 Booting containers..."
+./vendor/bin/sail up -d
+
+echo "⏳ Waiting for Database (10s)..."
+sleep 10
+
+echo "🏗️ Running migrations..."
+./vendor/bin/sail artisan migrate --force
+
+# 6. Final Permissions
+sudo chown -R $USER:$USER .
+
+echo "------------------------------------------------"
+echo "✅ Project $PROJECT_NAME is live!"
+echo "🌎 URL: https://${PROJECT_NAME//_/-}.dev.test"
+echo "------------------------------------------------"

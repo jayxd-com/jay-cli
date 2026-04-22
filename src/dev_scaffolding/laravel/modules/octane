@@ -1,14 +1,18 @@
 #!/bin/bash
 # Info: Optimizes Laravel with Octane & FrankenPHP
-# Info: Includes global binary caching to avoid repeated downloads
+# Info: Includes global binary caching and Traefik port alignment
+
+# Load Libraries
+LIB_ROOT="$(dirname "$0")/../../../lib"
+source "$LIB_ROOT/sail-compose-check"
 
 if [ ! -f "vendor/bin/sail" ]; then
     echo "❌ Execution Error: Sail binary not found."
     exit 1
 fi
 
+COMPOSE_FILE=$(get_compose_file)
 CACHE_DIR="/opt/jay-cli/cache"
-BINARY_NAME="frankenphp-linux-x86_64" # Standard for most Docker/Sail setups
 
 echo "⚡ Optimizing with Laravel Octane & FrankenPHP..."
 
@@ -23,17 +27,27 @@ if [ -f "$CACHE_DIR/frankenphp" ]; then
     chmod +x ./frankenphp
 fi
 
-# 3. Install Octane (will download if not injected, or use our injected one)
+# 3. Install Octane
 ./vendor/bin/sail php artisan octane:install --server=frankenphp --no-interaction
 
 # 4. Update Cache if new binary was downloaded
 if [ ! -f "$CACHE_DIR/frankenphp" ] && [ -f "./frankenphp" ]; then
-    echo "💾 Saving FrankenPHP binary to global cache for future projects..."
+    echo "💾 Saving FrankenPHP binary to global cache..."
     sudo cp ./frankenphp "$CACHE_DIR/frankenphp"
     sudo chmod +r "$CACHE_DIR/frankenphp"
 fi
 
-# 5. Configuration
+# 5. Configuration (.env)
 sed -i "s|^OCTANE_SERVER=.*|OCTANE_SERVER=frankenphp|g" .env
 
+# 6. Align Traefik with Octane Port (8000)
+# Safety Check: We specifically target the "-web" service loadbalancer port
+# to avoid accidentally overwriting Reverb ports (which use "-reverb").
+if [ -f "$COMPOSE_FILE" ] && grep -q "traefik.http.services" "$COMPOSE_FILE"; then
+    echo "🔌 Updating Traefik routing to use Octane port (8000)..."
+    # Target ONLY the -web service port
+    sed -i 's/\(-web.loadbalancer.server.port=\)[0-9]*/\18000/g' "$COMPOSE_FILE"
+fi
+
 echo "✅ Octane configured successfully."
+echo "👉 Note: Traefik is now routing traffic to port 8000."

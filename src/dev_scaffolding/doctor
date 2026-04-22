@@ -1,10 +1,47 @@
 #!/bin/bash
-# Info: Run a health check on the Jay-CLI installation and source files
-# Info: Verifies directory structure, libraries, and internal script links
+# Info: Run a health check on Jay-CLI or cleanup Docker orphans
+# Info: --help: Show this help menu
+# Info: --cleanup: Prunes orphaned Docker containers, volumes, and networks
+
+# --- HELP MENU ---
+if [[ "$*" == *"--help"* ]]; then
+    echo "🩺 Jay-CLI Doctor | Help Menu"
+    echo "------------------------------------------------"
+    echo "Usage: jay-cli doctor [flag]"
+    echo ""
+    echo "Flags:"
+    echo "  (none)      Run a full diagnostic health check on Jay-CLI."
+    echo "  --cleanup   Deep clean orphaned Docker containers, volumes, and networks."
+    echo "  --help      Show this help menu."
+    echo "------------------------------------------------"
+    exit 0
+fi
 
 echo "🩺 Jay-CLI Doctor | Diagnostic Tool"
 echo "------------------------------------------------"
 
+# --- CLEANUP LOGIC ---
+if [[ "$*" == *"--cleanup"* ]]; then
+    echo "🧹 Initiating Docker & System Cleanup..."
+    echo "------------------------------------------------"
+    
+    # 1. Prune unused containers and networks
+    echo "📦 Pruning stopped containers and dangling images..."
+    docker system prune -f
+    
+    # 2. Prune orphaned volumes
+    echo "💾 Pruning orphaned volumes (data from deleted projects)..."
+    docker volume prune -f
+    
+    # 3. Prune unused networks specifically
+    echo "🌐 Pruning unused networks (Traefik leftovers)..."
+    docker network prune -f
+    
+    echo -e "\n✅ Cleanup complete. Your Docker environment is lean and mean!"
+    exit 0
+fi
+
+# --- DIAGNOSTIC LOGIC ---
 ERROR=0
 SRC_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." &> /dev/null && pwd )"
 
@@ -41,13 +78,9 @@ while read -r script; do
     
     # Check for 'source' or '.' commands
     grep -E "^\s*(source|\.)\s+" "$script" | while read -r line; do
-        # Extract the path. This is a bit naive but handles "$LIB_ROOT/..." etc. if we resolve vars
-        # However, for a simple check, we can look for the common patterns we used.
         target=$(echo "$line" | awk '{print $2}' | sed 's/\"//g' | sed "s|\\\$LIB_ROOT|$SRC_DIR/lib|g" | sed "s|\\\$LIB_PATH|$SRC_DIR/lib/sail-compose-check|g" | sed "s|\\\$SCRIPT_DIR|$script_dir|g")
         
-        # Resolve relative paths like ../../../lib
         if [[ "$target" == *"/.."* ]]; then
-            # Use realpath if available, or just a simple resolve
             target=$(cd "$script_dir" && realpath -m "$target" 2>/dev/null)
         fi
 

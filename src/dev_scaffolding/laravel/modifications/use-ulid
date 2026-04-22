@@ -1,0 +1,96 @@
+#!/bin/bash
+# Info: Upgrade migrations and models to use ULIDs instead of auto-incrementing IDs
+# Info: --except=table1,table2: Exclude specific tables/models from upgrade
+
+EXCEPT_TABLES=""
+
+# Parse Arguments
+for arg in "$@"; do
+    case $arg in
+        --except=*)
+            EXCEPT_TABLES="${arg#*=}"
+            EXCEPT_TABLES="${EXCEPT_TABLES//,/ }"
+            ;;
+    esac
+done
+
+echo "🆔  Upgrading project to use ULIDs (Universal Mode)..."
+if [ -n "$EXCEPT_TABLES" ]; then
+    echo "🚫 Excluding tables: $EXCEPT_TABLES"
+fi
+
+if [ ! -f "vendor/bin/sail" ]; then
+    echo "❌ Error: Sail binary not found."
+    exit 1
+fi
+
+# 1. Update Migrations
+echo "📂 Scanning migrations..."
+find database/migrations -name "*.php" | while read -r migration; do
+    SKIP=false
+    for table in $EXCEPT_TABLES; do
+        if grep -q "Schema::create(['\"]$table['\"]" "$migration"; then
+            SKIP=true
+            break
+        fi
+    done
+
+    if [ "$SKIP" = true ]; then
+        echo "⏭️  Skipping migration: $(basename "$migration")"
+        continue
+    fi
+
+    # --- Standard Laravel Replacements ---
+    sed -i "s/\$table->id();/\$table->ulid('id')->primary();/g" "$migration"
+    sed -i "s/\$table->foreignId(/\$table->foreignUlid(/g" "$migration"
+    sed -i "s/\$table->bigIncrements('id');/\$table->ulid('id')->primary();/g" "$migration"
+    sed -i "s/\$table->unsignedBigInteger('\(.*\)_id')/\$table->ulid('\1_id')/g" "$migration"
+
+    # --- Spatie Permission Specific Replacements ---
+    # 1. Array access definitions
+    sed -i "s/\$table->unsignedBigInteger([[:space:]]*\$columnNames\['\(.*\)'\][[:space:]]*)/\$table->ulid(\$columnNames['\1'])/g" "$migration"
+    sed -i "s/\$table->bigIncrements([[:space:]]*\$columnNames\['id'\][[:space:]]*)/\$table->ulid(\$columnNames['id'])->primary()/g" "$migration"
+    
+    # 2. Variable-based definitions (The one causing your error!)
+    sed -i "s/\$table->unsignedBigInteger(\$pivotPermission);/\$table->ulid(\$pivotPermission);/g" "$migration"
+    sed -i "s/\$table->unsignedBigInteger(\$pivotRole);/\$table->ulid(\$pivotRole);/g" "$migration"
+    
+    # 3. Model morph key safety
+    sed -i "s/\$table->unsignedBigInteger([[:space:]]*\$columnNames\['model_morph_key'\][[:space:]]*)/\$table->ulid(\$columnNames['model_morph_key'])/g" "$migration"
+done
+
+# 2. Update Models
+echo "📂 Scanning models..."
+find app/Models -name "*.php" | while read -r model; do
+    SKIP=false
+    MODEL_BASE=$(basename "$model" .php)
+    
+    for table in $EXCEPT_TABLES; do
+        if grep -q "table\s*=\s*['\"]$table['\"]" "$model" || [[ "${table,,}" == "${MODEL_BASE,,}"* ]]; then
+            SKIP=true
+            break
+        fi
+    done
+
+    if [ "$SKIP" = true ]; then
+        echo "⏭️  Skipping model: $MODEL_BASE"
+        continue
+    fi
+
+    if ! grep -q "HasUlids" "$model"; then
+        echo "🧬 Adding HasUlids to $MODEL_BASE"
+        
+        # Add the import
+        sed -i "/namespace App\\\Models;/a \use Illuminate\\\Database\\\Eloquent\\\Concerns\\\HasUlids;" "$model"
+        
+        # Add the trait
+        if grep -q "use HasFactory," "$model"; then
+            sed -i "s/use HasFactory,/use HasFactory, HasUlids,/g" "$model"
+        elif grep -q "use HasFactory;" "$model"; then
+            sed -i "s/use HasFactory;/use HasFactory, HasUlids;/g" "$model"
+        fi
+    fi
+done
+
+echo "✅ Project successfully upgraded to ULIDs."
+echo "⚠️  Note: You may need to refresh your migrations (php artisan migrate:fresh)."

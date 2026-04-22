@@ -49,6 +49,22 @@ if [[ "$COMMAND" == "--help" ]] || [[ -z "$COMMAND" ]]; then
     echo "Usage: jay-cli [namespace] [command]"
     echo "--------------------------------------------"
     
+    # 1. GLOBAL UTILITIES (Root level scripts like 'doctor')
+    globals=($(ls -p "$ROOT_DIR" 2>/dev/null | grep -v /))
+    if [ ${#globals[@]} -gt 0 ]; then
+        echo "🛠️  [Global Utilities]"
+        for i in "${!globals[@]}"; do
+            cmd="${globals[$i]}"
+            cmd_path="${ROOT_DIR}/$cmd"
+            connector="├──"
+            [ $((i + 1)) -eq ${#globals[@]} ] && connector="└──"
+            echo "  $connector $cmd"
+            grep "^# Info:" "$cmd_path" | head -n 1 | cut -d':' -f2- | sed "s|^ |      └── |"
+        done
+        echo ""
+    fi
+
+    # 2. NAMESPACED COMMANDS (Folders)
     for dir in "$ROOT_DIR"/*/; do
         [ -d "$dir" ] || continue
         NAMESPACE=$(basename "$dir")
@@ -91,7 +107,6 @@ EOF
 
 # 4. Finalize the executable
 if [ -d "$EXECUTABLE_PATH" ]; then
-    echo "🧹 Cleaning up old directory at $EXECUTABLE_PATH..."
     sudo rm -rf "$EXECUTABLE_PATH"
 fi
 

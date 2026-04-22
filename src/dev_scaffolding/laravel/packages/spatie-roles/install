@@ -1,0 +1,82 @@
+#!/bin/bash
+# Info: Install and configure Spatie Laravel Permission (Roles & Permissions)
+
+echo "🛡️  Installing Spatie Laravel Permission..."
+
+if [ ! -f "vendor/bin/sail" ]; then
+    echo "❌ Error: Sail binary not found."
+    exit 1
+fi
+
+PACKAGE_DIR="$(dirname "$0")"
+
+# 1. Composer Require
+./vendor/bin/sail composer require spatie/laravel-permission
+
+# 2. Publish Config & Migrations
+./vendor/bin/sail php artisan vendor:publish --provider="Spatie\Permission\PermissionServiceProvider"
+
+# 3. Inject HasRoles trait into User Model
+USER_MODEL="app/Models/User.php"
+if [ -f "$USER_MODEL" ]; then
+    if ! grep -q "HasRoles" "$USER_MODEL"; then
+        echo "🧬 Injecting HasRoles trait into User model..."
+        sed -i "/namespace App\\\Models;/a \use Spatie\\\Permission\\\Traits\\\HasRoles;" "$USER_MODEL"
+        if grep -q "use HasFactory," "$USER_MODEL"; then
+            sed -i "s/use HasFactory,/use HasFactory, HasRoles,/g" "$USER_MODEL"
+        elif grep -q "use HasFactory;" "$USER_MODEL"; then
+            sed -i "s/use HasFactory;/use HasFactory, HasRoles,/g" "$USER_MODEL"
+        fi
+        echo "✅ User model updated with HasRoles."
+    fi
+fi
+
+# 4. ULID Alignment Check
+if grep -q "HasUlids" "$USER_MODEL" 2>/dev/null; then
+    echo "🆔 Project uses ULIDs. Aligning Spatie migrations..."
+    MOD_SCRIPT="$PACKAGE_DIR/../../modifications/use-ulid"
+    if [ -f "$MOD_SCRIPT" ]; then
+        bash "$MOD_SCRIPT"
+    fi
+fi
+
+# 5. Run Migrations
+./vendor/bin/sail php artisan migrate
+
+# 6. Handle --with=roles
+if [[ "$*" == *"--with=roles"* ]]; then
+    echo "📦 Injecting Agency-Grade Platform Roles boilerplate..."
+    
+    mkdir -p app/Enums app/Console/Commands app/Policies app/Traits
+    
+    # Copy Assets from package folder
+    cp "$PACKAGE_DIR/Enums/PlatformRole.php" app/Enums/
+    cp "$PACKAGE_DIR/console/CreatePlatformRoles.php" app/Console/Commands/
+    cp "$PACKAGE_DIR/Policies/PlatformPolicy.php" app/Policies/
+    cp "$PACKAGE_DIR/Traits/HasPlatformRoles.php" app/Traits/
+    
+    # Inject HasPlatformRoles trait into User.php
+    if ! grep -q "HasPlatformRoles" "$USER_MODEL"; then
+        echo "🧬 Adding helper trait to User model..."
+        sed -i "/namespace App\\\Models;/a \use App\\\Traits\\\HasPlatformRoles;" "$USER_MODEL"
+        sed -i "s/HasRoles/HasRoles, HasPlatformRoles/g" "$USER_MODEL"
+    fi
+
+    # Inject Super Admin Gate into AppServiceProvider
+    PROVIDER="app/Providers/AppServiceProvider.php"
+    if [ -f "$PROVIDER" ] && ! grep -q "Gate::before" "$PROVIDER"; then
+        echo "🔐 Injecting Super Admin Gate into AppServiceProvider..."
+        sed -i "/use Illuminate\\\Support\\\ServiceProvider;/a \use Illuminate\\\Support\\\Facades\\\Gate;\nuse App\\\Enums\\\PlatformRole;" "$PROVIDER"
+        sed -i "/public function boot(): void/a \        Gate::before(function (\$user, \$ability) {\n            return \$user->hasRole(PlatformRole::PLATFORM_SUPER_ADMIN->value) ? true : null;\n        });" "$PROVIDER"
+    fi
+
+    echo "------------------------------------------------"
+    echo "📝 NEXT STEPS (Action Required):"
+    echo "1. Review and adjust your roles in: app/Enums/PlatformRole.php"
+    echo "2. Review your platform policies in: app/Policies/PlatformPolicy.php"
+    echo "3. Run the following command to sync your roles to the database:"
+    echo "   👉 php artisan platform:create-roles"
+    echo "------------------------------------------------"
+fi
+
+echo "✅ Spatie Permission installed and configured."

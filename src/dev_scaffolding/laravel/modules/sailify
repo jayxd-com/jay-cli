@@ -1,15 +1,19 @@
 #!/bin/bash
 
 PROJECT=$1
+
+# --- 1. AUTO-DETECT PROJECT NAME ---
 if [ -z "$PROJECT" ]; then
-  echo "❌ Error: Please provide a project name."
-  echo "Usage: sailify my-project-name"
-  exit 1
+    PROJECT=$(basename "$PWD")
+    if [[ "$PROJECT" == "backend" || "$PROJECT" == "app" || "$PROJECT" == "src" ]]; then
+        PROJECT=$(basename "$(dirname "$PWD")")
+    fi
+    echo "🔍 No project name provided. Auto-detected: $PROJECT"
 fi
 
-# Sanitize name: underscores to hyphens for DNS compliance
 CLEAN_PROJECT="${PROJECT//_/-}"
 DOMAIN="${CLEAN_PROJECT}.dev.test"
+
 # Load Libraries
 LIB_ROOT="$(dirname "$0")/../../../lib"
 source "$LIB_ROOT/sail-compose-check"
@@ -19,6 +23,17 @@ COMPOSE_FILE=$(get_compose_file)
 if [ -z "$COMPOSE_FILE" ]; then
     echo "❌ Error: No valid compose file found."
     exit 1
+fi
+
+# --- 2. HANDLE FORCE RE-INJECTION (Using Anchors) ---
+if [[ "$*" == *"--force"* ]]; then
+    echo "♻️  Force detected. Removing anchored Traefik web block..."
+    # Instantly delete everything between the JAY-CLI markers
+    sed -i '/# --- JAY-CLI-WEB-TRAEFIK-START ---/,/# --- JAY-CLI-WEB-TRAEFIK-END ---/d' "$COMPOSE_FILE"
+    
+    # Fallback: If no anchors found (old project), clean using specific routers
+    sed -i "/traefik\.http\.routers\.${CLEAN_PROJECT}-dev-test-web/d" "$COMPOSE_FILE"
+    sed -i "/traefik\.http\.services\.${CLEAN_PROJECT}-dev-test-web/d" "$COMPOSE_FILE"
 fi
 
 # --- 3. UPDATE .ENV ---
@@ -31,7 +46,7 @@ if [ -f .env ]; then
     sed -i "s|^DB_DATABASE=.*|DB_DATABASE=$DB_NAME|g" .env
     sed -i "s|^DB_USERNAME=.*|DB_USERNAME=sail|g" .env
 
-    # Ports
+    # Ports cleanup and re-injection
     sed -i '/# --- SAILIFY AUTO PORTS ---/d' .env
     sed -i '/^FORWARD_/d' .env
     sed -i '/^VITE_PORT=/d' .env
@@ -49,12 +64,24 @@ if [ -f .env ]; then
 fi
 
 # --- 4. MODIFY COMPOSE FILE ---
+# Cleanup comment markers
+sed -i "s|# # # #|#|g" "$COMPOSE_FILE"
+sed -i "s|# # #|#|g" "$COMPOSE_FILE"
+sed -i "s|# #|#|g" "$COMPOSE_FILE"
+
 sed -i "s|- '\${APP_PORT:-80}:80'|# - '\${APP_PORT:-80}:80'|g" "$COMPOSE_FILE"
 sed -i "s|# - '\${VITE_PORT:-5173}:\${VITE_PORT:-5173}'|- '\${VITE_PORT:-5173}:\${VITE_PORT:-5173}'|g" "$COMPOSE_FILE"
 
-# Inject Traefik Labels
-if ! grep -q "traefik.enable" "$COMPOSE_FILE"; then
-    awk -v domain="$DOMAIN" '
+# Detect Octane Port
+FINAL_PORT="80"
+if grep -q "OCTANE_SERVER=frankenphp" .env 2>/dev/null; then
+    FINAL_PORT="8000"
+    echo "⚡ Octane detected. Using port $FINAL_PORT for Traefik."
+fi
+
+# Inject Traefik Labels with Anchors
+if ! grep -q "JAY-CLI-WEB-TRAEFIK-START" "$COMPOSE_FILE"; then
+    awk -v domain="$DOMAIN" -v port="$FINAL_PORT" '
     BEGIN {
         router_name = domain
         gsub(/[\._]/, "-", router_name)
@@ -66,14 +93,26 @@ if ! grep -q "traefik.enable" "$COMPOSE_FILE"; then
         print
         print "            - gateway"
         print "        labels:"
+        print "            # --- JAY-CLI-WEB-TRAEFIK-START ---"
         print "            - \"traefik.enable=true\""
         print "            - \"traefik.docker.network=gateway\""
+        
+        # HTTPS Router
         print "            - \"traefik.http.routers." router_name "-web.entrypoints=websecure\""
-        # Removed backslash before backtick to fix awk warning
         print "            - \"traefik.http.routers." router_name "-web.rule=Host(`" domain "`)\""
         print "            - \"traefik.http.routers." router_name "-web.tls=true\""
-        print "            - \"traefik.http.services." router_name "-web.loadbalancer.server.port=80\""
         print "            - \"traefik.http.routers." router_name "-web.service=" router_name "-web\""
+        
+        # HTTP -> HTTPS Redirection
+        print "            - \"traefik.http.routers." router_name "-web-http.entrypoints=web\""
+        print "            - \"traefik.http.routers." router_name "-web-http.rule=Host(`" domain "`)\""
+        print "            - \"traefik.http.routers." router_name "-web-http.middlewares=" router_name "-https-redirect\""
+        print "            - \"traefik.http.middlewares." router_name "-https-redirect.redirectscheme.scheme=https\""
+        
+        # Service Configuration
+        print "            - \"traefik.http.services." router_name "-web.loadbalancer.server.port=" port "\""
+        print "            # --- JAY-CLI-WEB-TRAEFIK-END ---"
+        
         in_laravel = 0
         next
     }

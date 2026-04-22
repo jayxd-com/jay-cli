@@ -1,0 +1,74 @@
+#!/bin/bash
+# Info: Modify or upgrade existing project features
+# Info: --run=mod1,mod2: Execute specific modifications
+# Info: --list: List all available modification scripts
+
+MOD_DIR="$(dirname "$0")/modifications"
+AVAILABLE_MODS=$(ls -p "$MOD_DIR" 2>/dev/null | grep -v /)
+
+show_help() {
+    echo "🦁 Jay-CLI | Project Modifier"
+    echo "Usage: jay-cli laravel modify [options]"
+    echo ""
+    echo "Options:"
+    echo "  --run=m1,m2         Run specific modifications"
+    echo "  --list              List all available modifications"
+    echo "  --help              Show this help menu"
+    echo ""
+    list_mods
+    exit 0
+}
+
+list_mods() {
+    echo "🛠️  Available Modifications:"
+    if [ -z "$AVAILABLE_MODS" ]; then
+        echo "  (No modification scripts found in $MOD_DIR)"
+    else
+        for mod in $AVAILABLE_MODS; do
+            echo "  - $mod"
+        done
+    fi
+}
+
+# Parse Arguments
+RUN_TARGETS=""
+
+for arg in "$@"; do
+    case $arg in
+        --help)
+            show_help
+            ;;
+        --list)
+            list_mods
+            exit 0
+            ;;
+        --run=*)
+            RUN_TARGETS="${arg#*=}"
+            RUN_TARGETS="${RUN_TARGETS//,/ }"
+            ;;
+    esac
+done
+
+if [ ! -f "vendor/bin/sail" ]; then
+    echo "❌ Execution Error: Sail binary not found. Are you in a Laravel project root?"
+    exit 1
+fi
+
+if [ -z "$RUN_TARGETS" ]; then
+    echo "⚠️  No modifications specified. Use --run=mod-name"
+    echo "👉 Run 'jay-cli laravel modify --list' to see options."
+    exit 1
+fi
+
+echo "⚙️  Running Project Modifications..."
+
+for mod in $RUN_TARGETS; do
+    if [ -f "$MOD_DIR/$mod" ]; then
+        echo "🔹 Executing: $mod..."
+        bash "$MOD_DIR/$mod"
+    else
+        echo "⚠️  Warning: Modification '$mod' not found. Skipping."
+    fi
+done
+
+echo "✅ All requested modifications have been completed."

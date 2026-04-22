@@ -1,0 +1,86 @@
+#!/bin/bash
+# Info: Install additional agency-grade Laravel packages
+# Info: --install=pkg1,pkg2: Install specific packages
+# Info: --list: List all available packages
+# Info: Supports sub-flags like --with=roles
+
+PACKAGES_DIR="$(dirname "$0")/packages"
+# Only list directories (modern packages) or files (legacy)
+AVAILABLE_PACKAGES=$(ls -F "$PACKAGES_DIR" 2>/dev/null | sed 's/\///g')
+
+show_help() {
+    echo "🦁 Jay-CLI | Laravel Package Installer"
+    echo "Usage: jay-cli laravel install-packages [options]"
+    echo ""
+    echo "Options:"
+    echo "  --install=p1,p2     Install specific packages"
+    echo "  --list              List all available packages"
+    echo "  --help              Show this help menu"
+    echo ""
+    list_packages
+    exit 0
+}
+
+list_packages() {
+    echo "📦 Available Packages:"
+    if [ -z "$AVAILABLE_PACKAGES" ]; then
+        echo "  (No packages found in $PACKAGES_DIR)"
+    else
+        for pkg in $AVAILABLE_PACKAGES; do
+            echo "  - $pkg"
+        done
+    fi
+}
+
+# Parse Arguments
+INSTALL_TARGETS=""
+
+for arg in "$@"; do
+    case $arg in
+        --help)
+            show_help
+            ;;
+        --list)
+            list_packages
+            exit 0
+            ;;
+        --install=*)
+            INSTALL_TARGETS="${arg#*=}"
+            INSTALL_TARGETS="${INSTALL_TARGETS//,/ }"
+            ;;
+    esac
+done
+
+if [ ! -f "vendor/bin/sail" ]; then
+    echo "❌ Execution Error: Sail binary not found. Are you in a Laravel project root?"
+    exit 1
+fi
+
+if [ -z "$INSTALL_TARGETS" ]; then
+    echo "⚠️  No packages specified. Use --install=package-name"
+    echo "👉 Run 'jay-cli laravel install-packages --list' to see options."
+    exit 1
+fi
+
+echo "🛠️  Starting Package Installation Suite..."
+
+for pkg in $INSTALL_TARGETS; do
+    if [ -d "$PACKAGES_DIR/$pkg" ] && [ -f "$PACKAGES_DIR/$pkg/install" ]; then
+        echo "🔹 Installing package: $pkg..."
+        bash "$PACKAGES_DIR/$pkg/install" "$@"
+    elif [ -f "$PACKAGES_DIR/$pkg" ]; then
+        echo "🔹 Installing package: $pkg..."
+        bash "$PACKAGES_DIR/$pkg" "$@"
+    else
+        echo "⚠️  Warning: Package '$pkg' not found. Skipping."
+    fi
+done
+
+# Restart and Build
+echo "🔄 Restarting Sail and rebuilding assets..."
+./vendor/bin/sail down
+./vendor/bin/sail up -d
+./vendor/bin/sail npm install
+./vendor/bin/sail npm run build
+
+echo "✅ All requested packages have been processed."

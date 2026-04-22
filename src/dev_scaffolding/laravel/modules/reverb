@@ -53,17 +53,20 @@ fi
 # 6. Inject Traefik Labels into Compose for WebSocket routing
 echo "🔌 Injecting Traefik WebSocket routing for Reverb..."
 
-# First, clean up any existing reverb labels for this project to avoid duplicates
+# Cleanup old labels (both legacy and anchored)
+sed -i '/# --- JAY-CLI-REVERB-TRAEFIK-START ---/,/# --- JAY-CLI-REVERB-TRAEFIK-END ---/d' "$COMPOSE_FILE"
 sed -i "/$ROUTER_NAME-reverb/d" "$COMPOSE_FILE"
 
-# Create a temporary file for the labels
+# Create a temporary file for the labels with anchors
 TEMP_LABELS="reverb_labels.tmp"
 cat <<EOF > "$TEMP_LABELS"
+            # --- JAY-CLI-REVERB-TRAEFIK-START ---
             - "traefik.http.routers.$ROUTER_NAME-reverb.entrypoints=websecure"
             - "traefik.http.routers.$ROUTER_NAME-reverb.rule=Host(\`$DOMAIN\`) && (PathPrefix(\`/app\`) || PathPrefix(\`/reverb\`))"
             - "traefik.http.routers.$ROUTER_NAME-reverb.tls=true"
             - "traefik.http.services.$ROUTER_NAME-reverb.loadbalancer.server.port=$NEW_REVERB_PORT"
             - "traefik.http.routers.$ROUTER_NAME-reverb.service=$ROUTER_NAME-reverb"
+            # --- JAY-CLI-REVERB-TRAEFIK-END ---
 EOF
 
 # Use sed to read the temporary file after the traefik.enable line
@@ -72,13 +75,12 @@ if grep -q "traefik.enable=true" "$COMPOSE_FILE"; then
 else
     # Fallback if traefik.enable isn't found (e.g. sailify hasn't run)
     echo "⚠️  Warning: traefik.enable label not found. Appending to end of labels block..."
-    # Naive attempt to find any traefik label and append
-    sed -i "/traefik/r $TEMP_LABELS" "$COMPOSE_FILE"
+    sed -i "/labels:/r $TEMP_LABELS" "$COMPOSE_FILE"
 fi
 rm "$TEMP_LABELS"
 
 # 7. Verification Check
-if grep -q "$ROUTER_NAME-reverb" "$COMPOSE_FILE"; then
+if grep -q "JAY-CLI-REVERB-TRAEFIK-START" "$COMPOSE_FILE"; then
     echo "✅ Reverb labels verified in $COMPOSE_FILE"
 else
     echo "❌ Error: Failed to inject Reverb labels. Manual intervention required."

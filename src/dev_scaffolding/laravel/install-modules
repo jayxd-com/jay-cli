@@ -93,7 +93,11 @@ for mod in $INSTALL_TARGETS; do
         fi
         
         echo "🔹 Installing module: $mod..."
-        bash "$MODULES_DIR/$mod"
+        if [ "$FORCE_INSTALL" = true ]; then
+            bash "$MODULES_DIR/$mod" --force
+        else
+            bash "$MODULES_DIR/$mod"
+        fi
     else
         echo "⚠️  Warning: Module '$mod' not found. Skipping."
     fi

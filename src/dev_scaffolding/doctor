@@ -1,142 +1,69 @@
 #!/bin/bash
-# Info: Run a health check on Jay-CLI or cleanup Docker orphans
-# Info: --help: Show this help menu
-# Info: --cleanup: Prunes orphaned Docker containers, volumes, and networks
+# Info: Diagnostic and Cleanup tools for Jay-CLI
 
-# --- HELP MENU ---
+echo "👨‍⚕️ Jay-CLI Doctor - Health Check & Environment Recovery"
+
+# Helper for help menu
 if [[ "$*" == *"--help"* ]]; then
-    echo "🩺 Jay-CLI Doctor | Help Menu"
-    echo "------------------------------------------------"
-    echo "Usage: jay-cli doctor [flag]"
+    echo "Usage: jay-cli doctor [options]"
     echo ""
-    echo "Flags:"
-    echo "  (none)      Run a full diagnostic health check on Jay-CLI."
-    echo "  --cleanup   Deep clean orphaned Docker containers, volumes, and networks."
-    echo "  --help      Show this help menu."
-    echo "------------------------------------------------"
+    echo "Options:"
+    echo "  --cleanup    Perform a deep prune of stopped containers, volumes, and networks."
+    echo "  --check      Check system integrity (Paths, Docker Networks, etc.)"
     exit 0
 fi
 
-echo "🩺 Jay-CLI Doctor | Diagnostic Tool"
-echo "------------------------------------------------"
-
-# --- CLEANUP LOGIC ---
-if [[ "$*" == *"--cleanup"* ]]; then
-    echo "🧹 Initiating Docker & System Cleanup..."
-    echo "------------------------------------------------"
+# 1. System Integrity Check
+check_integrity() {
+    echo "🔍 Checking system integrity..."
     
-    # 1. Prune unused containers and networks
-    echo "📦 Pruning stopped containers and dangling images..."
+    # Check Gateway Network
+    if ! docker network ls | grep -q "gateway"; then
+        echo "⚠️  Missing 'gateway' network. Recreating..."
+        docker network create gateway
+    else
+        echo "✅ 'gateway' network is active."
+    fi
+
+    # Check Traefik Container
+    if ! docker ps | grep -q "traefik"; then
+        echo "⚠️  Traefik (global-gateway) is NOT running."
+    else
+        echo "✅ Traefik is running."
+    fi
+}
+
+# 2. Perform Cleanup
+perform_cleanup() {
+    echo "🧹 Starting deep cleanup..."
+    
+    # Stop and remove all containers EXCEPT Traefik (optional safety)
+    # docker stop $(docker ps -aq) 
+    
+    echo "🗑️  Pruning Docker System..."
     docker system prune -f
     
-    # 2. Prune orphaned volumes
-    echo "💾 Pruning orphaned volumes (data from deleted projects)..."
+    echo "🗑️  Pruning Volumes..."
     docker volume prune -f
     
-    # 3. Prune unused networks specifically
-    echo "🌐 Pruning unused networks (Traefik leftovers)..."
+    # We prune networks EXCEPT gateway
+    echo "🗑️  Pruning Networks (Safe Mode)..."
     docker network prune -f
     
-    echo -e "\n✅ Cleanup complete. Your Docker environment is lean and mean!"
-    exit 0
-fi
-
-# --- DIAGNOSTIC LOGIC ---
-ERROR=0
-SRC_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." &> /dev/null && pwd )"
-
-# 1. Path & Architecture Verification
-echo "🔍 Checking Directory Structure..."
-REQUIRED_DIRS=("lib" "dev_scaffolding")
-
-for dir in "${REQUIRED_DIRS[@]}"; do
-    if [ -d "$SRC_DIR/$dir" ]; then
-        echo "✅ Found $dir/ directory."
-    else
-        echo "❌ Missing $dir/ directory at $SRC_DIR/$dir"
-        ERROR=1
+    # Re-ensure gateway exists after prune
+    if ! docker network ls | grep -q "gateway"; then
+        docker network create gateway
     fi
-done
 
-# 2. Shared Libraries Verification
-echo -e "\n📚 Checking Shared Libraries..."
-LIBS=("port-check" "sail-compose-check")
-for lib in "${LIBS[@]}"; do
-    if [ -f "$SRC_DIR/lib/$lib" ]; then
-        echo "✅ Library '$lib' is present."
-    else
-        echo "❌ Library '$lib' is missing from $SRC_DIR/lib/"
-        ERROR=1
-    fi
-done
+    echo "✅ Cleanup complete. Environment is fresh."
+}
 
-# 3. Link Integrity (Internal Sourcing)
-echo -e "\n🔗 Checking Script Link Integrity (Internal Sourcing)..."
-while read -r script; do
-    script_name=$(basename "$script")
-    script_dir=$(dirname "$script")
-    
-    # Check for 'source' or '.' commands
-    grep -E "^\s*(source|\.)\s+" "$script" | while read -r line; do
-        target=$(echo "$line" | awk '{print $2}' | sed 's/\"//g' | sed "s|\\\$LIB_ROOT|$SRC_DIR/lib|g" | sed "s|\\\$LIB_PATH|$SRC_DIR/lib/sail-compose-check|g" | sed "s|\\\$SCRIPT_DIR|$script_dir|g")
-        
-        if [[ "$target" == *"/.."* ]]; then
-            target=$(cd "$script_dir" && realpath -m "$target" 2>/dev/null)
-        fi
-
-        if [ -n "$target" ] && [ ! -f "$target" ]; then
-            echo "❌ $script_name: Broken link detected -> $target"
-            ERROR=1
-        else
-            echo "✅ $script_name: Internal link OK."
-        fi
-    done
-done < <(find "$SRC_DIR/dev_scaffolding" -type f)
-
-# 4. Help Menu Metadata Verification
-echo -e "\n📝 Checking Command Metadata (# Info tags)..."
-find "$SRC_DIR/dev_scaffolding" -maxdepth 2 -type f -not -path "*/modules/*" | while read -r script; do
-    if grep -q "^# Info:" "$script"; then
-        echo "✅ $(basename "$script"): Has description tag."
-    else
-        echo "⚠️  $(basename "$script"): Missing # Info tag (will look generic in help)."
-    fi
-done
-
-# 5. Port Registry Verification
-echo -e "\n🔌 Checking Port Registry..."
-REGISTRY="$HOME/.jay_cli_ports"
-if [ -f "$REGISTRY" ]; then
-    if [ -w "$REGISTRY" ]; then
-        echo "✅ Port registry is writable ($REGISTRY)."
-    else
-        echo "❌ Port registry is NOT writable ($REGISTRY)."
-        ERROR=1
-    fi
+# Execution Logic
+if [[ "$*" == *"--cleanup"* ]]; then
+    perform_cleanup
 else
-    echo "ℹ️  Port registry doesn't exist yet (will be created on first use)."
-fi
-
-# 6. System Sync Verification
-echo -e "\n🌐 Checking System Mirror..."
-if [ -d "/opt/jay-cli" ]; then
-    echo "✅ /opt/jay-cli mirror directory exists."
-else
-    echo "⚠️  /opt/jay-cli missing. Have you run install-linux.sh?"
-fi
-
-if [ -L "/usr/local/bin/jay-cli" ] || [ -f "/usr/local/bin/jay-cli" ]; then
-    echo "✅ Global 'jay-cli' command is present."
-else
-    echo "❌ Global 'jay-cli' command is missing from /usr/local/bin/"
-    ERROR=1
+    check_integrity
 fi
 
 echo "------------------------------------------------"
-if [ "$ERROR" == 1 ]; then
-    echo "💥 Doctor found some issues. Please review the errors above."
-    exit 1
-else
-    echo "✨ Jay-CLI is healthy and ready to scaffold!"
-    exit 0
-fi
+echo "🏁 Doctor session complete."

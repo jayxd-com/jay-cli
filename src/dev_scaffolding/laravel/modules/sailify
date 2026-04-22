@@ -1,131 +1,112 @@
 #!/bin/bash
+# Info: Configure Laravel Sail with Octane & Traefik (HTTPS/SSL)
+# Info: --force: Overwrite existing Traefik labels
 
-PROJECT=$1
-
-# --- 1. AUTO-DETECT PROJECT NAME ---
-if [ -z "$PROJECT" ]; then
-    PROJECT=$(basename "$PWD")
-    if [[ "$PROJECT" == "backend" || "$PROJECT" == "app" || "$PROJECT" == "src" ]]; then
-        PROJECT=$(basename "$(dirname "$PWD")")
-    fi
-    echo "🔍 No project name provided. Auto-detected: $PROJECT"
-fi
-
-CLEAN_PROJECT="${PROJECT//_/-}"
-DOMAIN="${CLEAN_PROJECT}.dev.test"
-
-# Load Libraries
-LIB_ROOT="$(dirname "$0")/../../../lib"
-source "$LIB_ROOT/sail-compose-check"
-source "$LIB_ROOT/port-check"
-
-COMPOSE_FILE=$(get_compose_file)
-if [ -z "$COMPOSE_FILE" ]; then
-    echo "❌ Error: No valid compose file found."
-    exit 1
-fi
-
-# --- 2. HANDLE FORCE RE-INJECTION (Using Anchors) ---
+FORCE=false
 if [[ "$*" == *"--force"* ]]; then
-    echo "♻️  Force detected. Removing anchored Traefik web block..."
-    # Instantly delete everything between the JAY-CLI markers
-    sed -i '/# --- JAY-CLI-WEB-TRAEFIK-START ---/,/# --- JAY-CLI-WEB-TRAEFIK-END ---/d' "$COMPOSE_FILE"
-    
-    # Fallback: If no anchors found (old project), clean using specific routers
-    sed -i "/traefik\.http\.routers\.${CLEAN_PROJECT}-dev-test-web/d" "$COMPOSE_FILE"
-    sed -i "/traefik\.http\.services\.${CLEAN_PROJECT}-dev-test-web/d" "$COMPOSE_FILE"
+    FORCE=true
 fi
 
-# --- 3. UPDATE .ENV ---
-if [ -f .env ]; then
-    sed -i "s|^APP_URL=.*|APP_URL=https://$DOMAIN|g" .env
-    sed -i '/^ASSET_URL=/d' .env
-    sed -i "/^APP_URL=/a ASSET_URL=https://$DOMAIN" .env
+echo "⛵ Configuring Sail with Traefik Hardening..."
 
-    DB_NAME="${CLEAN_PROJECT//-/_}"
-    sed -i "s|^DB_DATABASE=.*|DB_DATABASE=$DB_NAME|g" .env
-    sed -i "s|^DB_USERNAME=.*|DB_USERNAME=sail|g" .env
-
-    # Ports cleanup and re-injection
-    sed -i '/# --- SAILIFY AUTO PORTS ---/d' .env
-    sed -i '/^FORWARD_/d' .env
-    sed -i '/^VITE_PORT=/d' .env
-
-    echo "" >> .env
-    echo "# --- SAILIFY AUTO PORTS ---" >> .env
-    echo "VITE_PORT=$(get_unique_port)" >> .env
-    echo "FORWARD_DB_PORT=$(get_unique_port)" >> .env
-    echo "FORWARD_REDIS_PORT=$(get_unique_port)" >> .env
-    echo "FORWARD_MAILPIT_PORT=$(get_unique_port)" >> .env
-    echo "FORWARD_MAILPIT_DASHBOARD_PORT=$(get_unique_port)" >> .env
-    echo "FORWARD_TYPESENSE_PORT=$(get_unique_port)" >> .env
-    echo "FORWARD_RUSTFS_PORT=$(get_unique_port)" >> .env
-    echo "FORWARD_RUSTFS_CONSOLE_PORT=$(get_unique_port)" >> .env
+# 1. Ensure Gateway Network
+if ! docker network ls | grep -q "gateway"; then
+    echo "🌐 Creating missing 'gateway' network..."
+    docker network create gateway
 fi
 
-# --- 4. MODIFY COMPOSE FILE ---
-# Cleanup comment markers
-sed -i "s|# # # #|#|g" "$COMPOSE_FILE"
-sed -i "s|# # #|#|g" "$COMPOSE_FILE"
-sed -i "s|# #|#|g" "$COMPOSE_FILE"
+# 2. Domain Detection
+PROJECT_NAME=$(basename "$PWD")
+DOMAIN="${PROJECT_NAME}.dev.test"
 
-sed -i "s|- '\${APP_PORT:-80}:80'|# - '\${APP_PORT:-80}:80'|g" "$COMPOSE_FILE"
-sed -i "s|# - '\${VITE_PORT:-5173}:\${VITE_PORT:-5173}'|- '\${VITE_PORT:-5173}:\${VITE_PORT:-5173}'|g" "$COMPOSE_FILE"
+if [ -f ".env" ]; then
+    # Safely extract APP_URL without syntax errors
+    ENV_URL=$(grep "^APP_URL=" .env | cut -d '=' -f2 | tr -d '"' | tr -d "'")
+    if [[ "$ENV_URL" == *".test"* ]]; then
+        DOMAIN=$(echo "$ENV_URL" | sed -e 's|^[^/]*//||' -e 's|/.*$||')
+    fi
+fi
+ROUTER_NAME=$(echo "$DOMAIN" | sed 's/\./-/g')
 
-# Detect Octane Port
-FINAL_PORT="80"
-if grep -q "OCTANE_SERVER=frankenphp" .env 2>/dev/null; then
-    FINAL_PORT="8000"
-    echo "⚡ Octane detected. Using port $FINAL_PORT for Traefik."
+# 3. Octane/FrankenPHP Detection
+PORT=80
+if grep -q "frankenphp" compose.yaml || grep -q "OCTANE_SERVER=frankenphp" .env 2>/dev/null; then
+    PORT=8000
 fi
 
-# Inject Traefik Labels with Anchors
-if ! grep -q "JAY-CLI-WEB-TRAEFIK-START" "$COMPOSE_FILE"; then
-    awk -v domain="$DOMAIN" -v port="$FINAL_PORT" '
-    BEGIN {
-        router_name = domain
-        gsub(/[\._]/, "-", router_name)
-    }
-    /^    laravel\.test:/ { in_laravel = 1 }
-    in_laravel && /^        networks:/ {
-        print
-        getline # Print the "- sail" line
-        print
-        print "            - gateway"
-        print "        labels:"
-        print "            # --- JAY-CLI-WEB-TRAEFIK-START ---"
-        print "            - \"traefik.enable=true\""
-        print "            - \"traefik.docker.network=gateway\""
-        
-        # HTTPS Router
-        print "            - \"traefik.http.routers." router_name "-web.entrypoints=websecure\""
-        print "            - \"traefik.http.routers." router_name "-web.rule=Host(`" domain "`)\""
-        print "            - \"traefik.http.routers." router_name "-web.tls=true\""
-        print "            - \"traefik.http.routers." router_name "-web.service=" router_name "-web\""
-        
-        # HTTP -> HTTPS Redirection
-        print "            - \"traefik.http.routers." router_name "-web-http.entrypoints=web\""
-        print "            - \"traefik.http.routers." router_name "-web-http.rule=Host(`" domain "`)\""
-        print "            - \"traefik.http.routers." router_name "-web-http.middlewares=" router_name "-https-redirect\""
-        print "            - \"traefik.http.middlewares." router_name "-https-redirect.redirectscheme.scheme=https\""
-        
-        # Service Configuration
-        print "            - \"traefik.http.services." router_name "-web.loadbalancer.server.port=" port "\""
-        print "            # --- JAY-CLI-WEB-TRAEFIK-END ---"
-        
-        in_laravel = 0
-        next
-    }
-    1' "$COMPOSE_FILE" > tmp.yml && mv tmp.yml "$COMPOSE_FILE"
-fi
+# 4. Generate the Traefik Block
+read -r -d '' TRAEFIK_BLOCK << EOM
+            # --- JAY-CLI-WEB-TRAEFIK-START ---
+            - "traefik.enable=true"
+            - "traefik.docker.network=gateway"
+            - "traefik.http.routers.${ROUTER_NAME}.entrypoints=websecure"
+            - "traefik.http.routers.${ROUTER_NAME}.rule=Host(\`${DOMAIN}\`)"
+            - "traefik.http.routers.${ROUTER_NAME}.tls=true"
+            - "traefik.http.routers.${ROUTER_NAME}.service=${ROUTER_NAME}"
+            - "traefik.http.routers.${ROUTER_NAME}-http.entrypoints=web"
+            - "traefik.http.routers.${ROUTER_NAME}-http.rule=Host(\`${DOMAIN}\`)"
+            - "traefik.http.routers.${ROUTER_NAME}-http.middlewares=${ROUTER_NAME}-https-redirect"
+            - "traefik.http.routers.${ROUTER_NAME}-http.service=${ROUTER_NAME}"
+            - "traefik.http.middlewares.${ROUTER_NAME}-https-redirect.redirectscheme.scheme=https"
+            - "traefik.http.services.${ROUTER_NAME}.loadbalancer.server.port=${PORT}"
+            # --- JAY-CLI-WEB-TRAEFIK-END ---
+EOM
 
-# --- 5. NETWORK INJECTION ---
-if ! grep -q "^ *gateway:" "$COMPOSE_FILE"; then
-    if grep -q "^networks:" "$COMPOSE_FILE"; then
-        sed -i '/^networks:/a \    gateway:\n        external: true' "$COMPOSE_FILE"
+# 5. Injection Logic (Simplified with SED)
+if grep -q "JAY-CLI-WEB-TRAEFIK-START" compose.yaml; then
+    if [ "$FORCE" = true ]; then
+        # Replace existing block
+        # Escape newlines for sed
+        ESCAPED_BLOCK=$(echo "$TRAEFIK_BLOCK" | sed 's/$/\\/g')
+        sed -i "/JAY-CLI-WEB-TRAEFIK-START/,/JAY-CLI-WEB-TRAEFIK-END/c\\${ESCAPED_BLOCK%?}" compose.yaml
     else
-        echo -e "\nnetworks:\n    gateway:\n        external: true" >> "$COMPOSE_FILE"
+        echo "⏭️  Traefik labels already exist. Use --force to overwrite."
+        exit 0
+    fi
+else
+    # Inject after 'labels:'
+    ESCAPED_BLOCK=$(echo "$TRAEFIK_BLOCK" | sed 's/$/\\/g')
+    sed -i "/^[[:space:]]*labels:/a\\${ESCAPED_BLOCK%?}" compose.yaml
+fi
+
+# 6. Gateway Network Injection
+if ! grep -q "^[[:space:]]*-[[:space:]]*gateway" compose.yaml; then
+    sed -i '/^[[:space:]]*networks:/a\            - gateway' compose.yaml
+fi
+
+if ! grep -q "^[[:space:]]*gateway:" compose.yaml; then
+    echo -e "\nnetworks:\n    gateway:\n        external: true" >> compose.yaml
+fi
+
+# 7. Laravel HTTPS Hardening (.env & AppServiceProvider)
+echo "🔒 Hardening Laravel SSL configuration..."
+
+# Update .env
+if [ -f ".env" ]; then
+    if ! grep -q "TRUSTED_PROXIES" .env; then
+        echo -e "\nTRUSTED_PROXIES=\"*\"" >> .env
+    else
+        sed -i 's/^TRUSTED_PROXIES=.*/TRUSTED_PROXIES="*"/' .env
     fi
 fi
 
-echo "✅ $COMPOSE_FILE updated for Traefik v3 SSL!"
+# Update AppServiceProvider
+SERVICE_PROVIDER="app/Providers/AppServiceProvider.php"
+if [ -f "$SERVICE_PROVIDER" ]; then
+    if ! grep -q "URL::forceScheme" "$SERVICE_PROVIDER"; then
+        echo "🔧 Injecting forceScheme into AppServiceProvider..."
+        awk '/public function boot\(\): void/ { print; found=1; next; }
+             found && /{/ { 
+                print "    {"; 
+                print "        if (app()->environment(\"local\")) {";
+                print "            \\Illuminate\\Support\\Facades\\URL::forceScheme(\"https\");";
+                print "        }";
+                found=0; next; 
+             }
+             { print }' "$SERVICE_PROVIDER" > "$SERVICE_PROVIDER.tmp" && mv "$SERVICE_PROVIDER.tmp" "$SERVICE_PROVIDER"
+    fi
+fi
+
+echo "✅ Traefik labels hardened and injected into compose.yaml"
+echo "🌐 Network 'gateway' ensured."
+echo "👉 Run: ./vendor/bin/sail up -d --force-recreate"

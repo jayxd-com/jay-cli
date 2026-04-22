@@ -5,8 +5,6 @@ namespace App\Console\Commands;
 use App\Enums\PlatformRole;
 use App\Enums\PlatformPermission;
 use Illuminate\Console\Command;
-use Spatie\Permission\Models\Role;
-use Spatie\Permission\Models\Permission;
 use Spatie\Permission\PermissionRegistrar;
 
 class CreatePlatformRoles extends Command
@@ -19,6 +17,10 @@ class CreatePlatformRoles extends Command
         $this->info('🔄 Resetting cached roles and permissions...');
         app()[PermissionRegistrar::class]->forgetCachedPermissions();
 
+        // Dynamically resolve models from config to ensure ULID support
+        $permissionModel = config('permission.models.permission');
+        $roleModel = config('permission.models.role');
+
         $guards = array_keys(config('auth.guards', ['web' => []]));
         $this->info('🚀 Syncing across guards: ' . implode(', ', $guards));
 
@@ -26,7 +28,7 @@ class CreatePlatformRoles extends Command
         $this->info('🔑 Creating permissions...');
         foreach (PlatformPermission::cases() as $permission) {
             foreach ($guards as $guard) {
-                Permission::firstOrCreate([
+                $permissionModel::firstOrCreate([
                     'name' => $permission->value,
                     'guard_name' => $guard
                 ]);
@@ -37,7 +39,7 @@ class CreatePlatformRoles extends Command
         $this->info('🎭 Creating roles and assigning permissions...');
         foreach (PlatformRole::cases() as $roleEnum) {
             foreach ($guards as $guard) {
-                $role = Role::firstOrCreate([
+                $role = $roleModel::firstOrCreate([
                     'name' => $roleEnum->value,
                     'guard_name' => $guard
                 ]);
